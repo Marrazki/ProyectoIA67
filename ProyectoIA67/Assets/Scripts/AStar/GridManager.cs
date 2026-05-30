@@ -22,6 +22,12 @@ public class GridManager : MonoBehaviour
     [Header("Obstáculos")]
     public LayerMask unwalkableMask;
 
+    [Header("Zonas oscuras")]
+    [Tooltip("Layer mask usado para marcar nodos con coste adicional en el grid.")]
+    public LayerMask darkZoneMask;
+    [Tooltip("Multiplicador de coste en nodos dentro de la máscara de zona oscura.")]
+    public float darkZoneCostMultiplier = 2f;
+
     // ── Estado interno ────────────────────────────────────────────────────────
     Node[,] _grid;
     float _nodeDiameter;
@@ -81,7 +87,9 @@ public class GridManager : MonoBehaviour
 
                 // A node is walkable if there is NO obstacle within its radius
                 bool walkable = !Physics.CheckSphere(worldPoint, nodeRadius, unwalkableMask);
-                _grid[x, y]   = new Node(walkable, worldPoint, x, y);
+                bool isDark = Physics.CheckSphere(worldPoint, nodeRadius, darkZoneMask);
+                float costMultiplier = isDark ? Mathf.Max(1f, darkZoneCostMultiplier) : 1f;
+                _grid[x, y] = new Node(walkable, worldPoint, x, y, costMultiplier);
             }
         }
     }
@@ -181,6 +189,8 @@ public class GridManager : MonoBehaviour
                 Gizmos.color = new Color(0f, 1f, 0f, 0.7f);            // Verde
             else if (pf != null && pf.vizClosedSet.Contains(node))
                 Gizmos.color = new Color(1f, 0.5f, 0f, 0.6f);          // Naranja
+            else if (node.costMultiplier > 1f)
+                Gizmos.color = new Color(0.2f, 0f, 0.6f, 0.4f);
             else
                 Gizmos.color = node.walkable
                     ? new Color(1f, 1f, 1f, 0.3f)
