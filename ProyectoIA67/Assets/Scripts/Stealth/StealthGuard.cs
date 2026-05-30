@@ -27,6 +27,8 @@ public class StealthGuard : MonoBehaviour
 
     [Header("Ataque")]
     public float attackRange = 1.2f;
+    public float attackDamage = 20f;
+    public float attackCooldown = 1f;
 
     [Header("A* navigation")]
     public float pathSpeed = 3f;
@@ -44,6 +46,10 @@ public class StealthGuard : MonoBehaviour
     List<Node> _currentPath;
     int _pathIndex;
     Vector3 _lastRequestedTarget;
+    bool _hasTarget;
+    float _repathTimer;
+    float _attackTimer;
+    const float RepathInterval = 0.5f;
 
     void Start()
     {
@@ -68,6 +74,8 @@ public class StealthGuard : MonoBehaviour
 
         _sensor.Sense();
         _tree?.Tick();
+        _repathTimer += Time.deltaTime;
+        _attackTimer += Time.deltaTime;
         UpdatePathIfNeeded();
         FollowPath();
     }
@@ -168,12 +176,32 @@ public class StealthGuard : MonoBehaviour
     {
         GetComponent<Renderer>().material.color = Color.black;
         transform.LookAt(player);
+
+        if (_attackTimer >= attackCooldown)
+        {
+            _attackTimer = 0f;
+
+            if (player != null)
+            {
+                var playerHealth = player.GetComponent<PlayerHealth>() ?? player.GetComponentInChildren<PlayerHealth>();
+                if (playerHealth != null)
+                {
+                    playerHealth.TakeDamage(attackDamage);
+                }
+                else
+                {
+                    Debug.LogWarning("StealthGuard: no se encontró PlayerHealth en el jugador.");
+                }
+            }
+        }
+
         return NodeStatus.Running;
     }
 
     void SetPathTarget(Vector3 target)
     {
-        if (_currentTarget == target && _currentPath != null && _pathIndex < _currentPath.Count)
+        _hasTarget = true;
+        if (Vector3.Distance(_currentTarget, target) < 0.01f && _currentPath != null && _pathIndex < _currentPath.Count)
             return;
 
         _currentTarget = target;
@@ -182,27 +210,54 @@ public class StealthGuard : MonoBehaviour
 
     void RequestPath(Vector3 destination)
     {
-        if (AStarPathfinder.instance == null || GridManager.instance == null)
+        var pathfinder = AStarPathfinder.instance ?? FindObjectOfType<AStarPathfinder>();
+        var grid = GridManager.instance ?? FindObjectOfType<GridManager>();
+
+        if (pathfinder == null || grid == null)
+        {
+            Debug.LogWarning("StealthGuard: falta AStarPathfinder o GridManager en la escena.");
+            _currentPath = null;
             return;
+        }
 
         _lastRequestedTarget = destination;
-        _currentPath = AStarPathfinder.instance.FindPath(transform.position, destination);
+        _currentPath = pathfinder.FindPath(transform.position, destination);
         _pathIndex = 0;
+
+        if (_currentPath == null || _currentPath.Count == 0)
+        {
+            _currentPath = null;
+            Debug.LogWarning($"StealthGuard: no se encontró camino A* desde {transform.position} hasta {destination}");
+        }
     }
 
     void UpdatePathIfNeeded()
     {
         if (_currentPath == null || _pathIndex >= _currentPath.Count)
+        {
+            if (_hasTarget && _repathTimer >= RepathInterval)
+            {
+                RequestPath(_currentTarget);
+                _repathTimer = 0f;
+            }
             return;
+        }
 
-        if (Vector3.Distance(_currentTarget, _lastRequestedTarget) > 0.5f)
+        if (Vector3.Distance(_currentTarget, _lastRequestedTarget) > 0.5f && _repathTimer >= RepathInterval)
+        {
             RequestPath(_currentTarget);
+            _repathTimer = 0f;
+        }
     }
 
     void FollowPath()
     {
         if (_currentPath == null || _currentPath.Count == 0 || _pathIndex >= _currentPath.Count)
+        {
+            if (_hasTarget)
+                FollowDirect(_currentTarget);
             return;
+        }
 
         Vector3 nodePos = _currentPath[_pathIndex].worldPosition;
         Vector3 target3D = new Vector3(nodePos.x, transform.position.y, nodePos.z);
@@ -214,6 +269,20 @@ public class StealthGuard : MonoBehaviour
 
         if (Vector3.Distance(transform.position, target3D) < pathNodeReachDistance)
             _pathIndex++;
+
+        if (_pathIndex >= _currentPath.Count)
+        {
+            _currentPath = null;
+        }
+    }
+
+    void FollowDirect(Vector3 target)
+    {
+        Vector3 target3D = new Vector3(target.x, transform.position.y, target.z);
+        transform.position = Vector3.MoveTowards(transform.position, target3D, pathSpeed * Time.deltaTime);
+        Vector3 dir = (target3D - transform.position).normalized;
+        if (dir.sqrMagnitude > 0.001f)
+            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), 10f * Time.deltaTime);
     }
 
     void OnDrawGizmos()
