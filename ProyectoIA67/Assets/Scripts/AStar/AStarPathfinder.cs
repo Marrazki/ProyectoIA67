@@ -71,6 +71,13 @@ public class AStarPathfinder : MonoBehaviour
             return null;
         }
 
+        if (startNode == targetNode)
+        {
+            var path = new List<Node> { startNode };
+            GridManager.instance.path = path;
+            return path;
+        }
+
         MinHeap<Node> openHeap = new MinHeap<Node>(GridManager.instance.MaxSize);
         HashSet<Node> openSet  = new HashSet<Node>();
         HashSet<Node> closedSet = new HashSet<Node>();
@@ -153,6 +160,14 @@ public class AStarPathfinder : MonoBehaviour
         {
             Debug.LogWarning("A*: El nodo de DESTINO no es walkable.");
             onComplete?.Invoke(null);
+            yield break;
+        }
+
+        if (startNode == targetNode)
+        {
+            var path = new List<Node> { startNode };
+            GridManager.instance.path = path;
+            onComplete?.Invoke(path);
             yield break;
         }
 
@@ -298,6 +313,11 @@ public class AStarPathfinder : MonoBehaviour
         {
             path.Add(current);
             current = current.parent;
+        }
+
+        if (path.Count == 0 && current == startNode)
+        {
+            path.Add(startNode);
         }
 
         path.Reverse();
