@@ -9,7 +9,6 @@ public class StealthGuard : MonoBehaviour
 
     [Header("Detección")]
     public float detectionRange = 6f;
-    [Tooltip("Multiplicador de rango cuando el jugador está en una zona oscura.")]
     [Range(0.1f, 1f)]
     public float darkZoneDetectionMultiplier = 0.6f;
 
@@ -24,6 +23,7 @@ public class StealthGuard : MonoBehaviour
     [Header("Investigación")]
     public float investigateSpeed = 3f;
     public float investigateReachDistance = 0.5f;
+    public float investigateMaxTime = 4f;
 
     [Header("Ataque")]
     public float attackRange = 1.2f;
@@ -42,13 +42,18 @@ public class StealthGuard : MonoBehaviour
     BTNode _tree;
 
     int _waypointIndex;
+
     Vector3 _currentTarget;
     List<Node> _currentPath;
     int _pathIndex;
     Vector3 _lastRequestedTarget;
     bool _hasTarget;
+
     float _repathTimer;
     float _attackTimer;
+
+    float _investigateTimer;
+
     const float RepathInterval = 0.5f;
 
     void Start()
@@ -73,18 +78,21 @@ public class StealthGuard : MonoBehaviour
         if (player == null) return;
 
         _sensor.Sense();
+
         _tree?.Tick();
+
         _repathTimer += Time.deltaTime;
         _attackTimer += Time.deltaTime;
+
         UpdatePathIfNeeded();
         FollowPath();
     }
 
     void OnGlobalAlert(Vector3 alertPosition)
     {
-        if (_blackboard == null) return;
         _blackboard.Set<Vector3>(BB.LastKnownPosition, alertPosition);
         _blackboard.Set<bool>(BB.HasClue, true);
+        _investigateTimer = 0f;
     }
 
     void BuildTree()
@@ -93,23 +101,33 @@ public class StealthGuard : MonoBehaviour
             new Sequence(
                 new Condition(LowHealth, "VidaBaja?"),
                 new BTAction(Flee, "Huir")
-            ) { Name = "Huir si vida baja" },
+            )
+            { Name = "Huir si vida baja" },
+
             new Sequence(
                 new Condition(EstaCerca, "EstaCerca?"),
                 new BTAction(Attack, "Atacar")
-            ) { Name = "Atacar si cerca" },
+            )
+            { Name = "Atacar si cerca" },
+
             new Sequence(
                 new Condition(CanSeePlayer, "VeoJugador?"),
                 new BTAction(Chase, "Perseguir")
-            ) { Name = "Perseguir si veo" },
+            )
+            { Name = "Perseguir si veo" },
+
             new Sequence(
                 new Condition(HasClue, "TengoPista?"),
                 new BTAction(Investigate, "Investigar")
-            ) { Name = "Investigar pista" },
+            )
+            { Name = "Investigar pista" },
+
             new Sequence(
                 new BTAction(Patrol, "Patrullar")
-            ) { Name = "Patrullar" }
-        ) { Name = "Guard Root" };
+            )
+            { Name = "Patrullar" }
+        )
+        { Name = "Guard Root" };
     }
 
     bool LowHealth() => false;
@@ -122,35 +140,52 @@ public class StealthGuard : MonoBehaviour
     {
         if (!_blackboard.Get<bool>(BB.CanSeePlayer)) return false;
         if (!_blackboard.Has(BB.LastKnownPosition)) return false;
-        return Vector3.Distance(transform.position, _blackboard.Get<Vector3>(BB.LastKnownPosition)) < attackRange;
+
+        return Vector3.Distance(transform.position,
+            _blackboard.Get<Vector3>(BB.LastKnownPosition)) < attackRange;
     }
 
     NodeStatus Flee()
     {
         GetComponent<Renderer>().material.color = Color.magenta;
+
         Vector3 dir = (transform.position - player.position).normalized;
         transform.position += dir * (chaseSpeed * Time.deltaTime);
         transform.LookAt(transform.position + dir);
+
         return NodeStatus.Running;
     }
 
     NodeStatus Chase()
     {
         GetComponent<Renderer>().material.color = Color.yellow;
+
         Vector3 targetPos = _blackboard.Get<Vector3>(BB.LastKnownPosition);
         SetPathTarget(targetPos);
+
         return NodeStatus.Running;
     }
 
     NodeStatus Investigate()
     {
         GetComponent<Renderer>().material.color = Color.red;
+
         Vector3 targetPos = _blackboard.Get<Vector3>(BB.LastKnownPosition);
         SetPathTarget(targetPos);
+
+        _investigateTimer += Time.deltaTime;
 
         if (Vector3.Distance(transform.position, targetPos) < investigateReachDistance)
         {
             _blackboard.Remove(BB.HasClue);
+            _investigateTimer = 0f;
+            return NodeStatus.Success;
+        }
+
+        if (_investigateTimer >= investigateMaxTime)
+        {
+            _blackboard.Remove(BB.HasClue);
+            _investigateTimer = 0f;
             return NodeStatus.Success;
         }
 
@@ -160,6 +195,7 @@ public class StealthGuard : MonoBehaviour
     NodeStatus Patrol()
     {
         GetComponent<Renderer>().material.color = Color.cyan;
+
         if (waypoints == null || waypoints.Length == 0)
             return NodeStatus.Running;
 
@@ -181,18 +217,11 @@ public class StealthGuard : MonoBehaviour
         {
             _attackTimer = 0f;
 
-            if (player != null)
-            {
-                var playerHealth = player.GetComponent<PlayerHealth>() ?? player.GetComponentInChildren<PlayerHealth>();
-                if (playerHealth != null)
-                {
-                    playerHealth.TakeDamage(attackDamage);
-                }
-                else
-                {
-                    Debug.LogWarning("StealthGuard: no se encontró PlayerHealth en el jugador.");
-                }
-            }
+            var playerHealth = player.GetComponent<PlayerHealth>()
+                              ?? player.GetComponentInChildren<PlayerHealth>();
+
+            if (playerHealth != null)
+                playerHealth.TakeDamage(attackDamage);
         }
 
         return NodeStatus.Running;
@@ -201,7 +230,10 @@ public class StealthGuard : MonoBehaviour
     void SetPathTarget(Vector3 target)
     {
         _hasTarget = true;
-        if (Vector3.Distance(_currentTarget, target) < 0.01f && _currentPath != null && _pathIndex < _currentPath.Count)
+
+        if (Vector3.Distance(_currentTarget, target) < 0.01f &&
+            _currentPath != null &&
+            _pathIndex < _currentPath.Count)
             return;
 
         _currentTarget = target;
@@ -215,7 +247,6 @@ public class StealthGuard : MonoBehaviour
 
         if (pathfinder == null || grid == null)
         {
-            Debug.LogWarning("StealthGuard: falta AStarPathfinder o GridManager en la escena.");
             _currentPath = null;
             return;
         }
@@ -225,10 +256,7 @@ public class StealthGuard : MonoBehaviour
         _pathIndex = 0;
 
         if (_currentPath == null || _currentPath.Count == 0)
-        {
             _currentPath = null;
-            Debug.LogWarning($"StealthGuard: no se encontró camino A* desde {transform.position} hasta {destination}");
-        }
     }
 
     void UpdatePathIfNeeded()
@@ -243,7 +271,8 @@ public class StealthGuard : MonoBehaviour
             return;
         }
 
-        if (Vector3.Distance(_currentTarget, _lastRequestedTarget) > 0.5f && _repathTimer >= RepathInterval)
+        if (Vector3.Distance(_currentTarget, _lastRequestedTarget) > 0.5f &&
+            _repathTimer >= RepathInterval)
         {
             RequestPath(_currentTarget);
             _repathTimer = 0f;
@@ -256,14 +285,17 @@ public class StealthGuard : MonoBehaviour
         {
             if (_hasTarget)
                 FollowDirect(_currentTarget);
+
             return;
         }
 
         Vector3 nodePos = _currentPath[_pathIndex].worldPosition;
         Vector3 target3D = new Vector3(nodePos.x, transform.position.y, nodePos.z);
+
         transform.position = Vector3.MoveTowards(transform.position, target3D, pathSpeed * Time.deltaTime);
 
         Vector3 dir = (target3D - transform.position).normalized;
+
         if (dir.sqrMagnitude > 0.001f)
             transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), 10f * Time.deltaTime);
 
@@ -271,29 +303,18 @@ public class StealthGuard : MonoBehaviour
             _pathIndex++;
 
         if (_pathIndex >= _currentPath.Count)
-        {
             _currentPath = null;
-        }
     }
 
     void FollowDirect(Vector3 target)
     {
         Vector3 target3D = new Vector3(target.x, transform.position.y, target.z);
+
         transform.position = Vector3.MoveTowards(transform.position, target3D, pathSpeed * Time.deltaTime);
+
         Vector3 dir = (target3D - transform.position).normalized;
+
         if (dir.sqrMagnitude > 0.001f)
             transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), 10f * Time.deltaTime);
-    }
-
-    void OnDrawGizmos()
-    {
-        if (_currentPath == null) return;
-        Gizmos.color = Color.cyan;
-        for (int i = 0; i < _currentPath.Count; i++)
-        {
-            Gizmos.DrawSphere(_currentPath[i].worldPosition, 0.1f);
-            if (i > 0)
-                Gizmos.DrawLine(_currentPath[i - 1].worldPosition, _currentPath[i].worldPosition);
-        }
     }
 }
